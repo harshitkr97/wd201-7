@@ -4,16 +4,22 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="./css/styles.css">
-    <title>Document</title>
+    <meta name="csrf-token" content="<%= csrfToken %>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="./css/styles.css" rel="stylesheet"> 
+    <title>To-Do</title>
+   
 </head>
-<body>
-    <header>
-        <%- include('header.ejs') %>
-    </header>
-    <%- include('todos.ejs') %>
-    <footer>
-        <%- include('footer.ejs') %>
-    </footer>
+<body class="font-sans"> 
+    <div class="grid grid-cols-6">
+        <div class="col-start-3 col-span-2">
+            <%- include('header.ejs') %>
+            <p class="py-3 text-center text-xl">Welcome</p>
+            <p class="py-2">New here? <a href="/signup" class="text-rose-200 hover:bg-sky-700">Sign-up now</a></p>
+            <p class="py-2">Already have an account <a href="/login" class="text-rose-200 hover:bg-sky-700">Sign in</a></p> 
+            <%- include('footer.ejs') %>
+        </div>
+    </div>
+    
 </body>
 </html>
