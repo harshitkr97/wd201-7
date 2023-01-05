@@ -1,89 +1,249 @@
-const express = require("express");
+/* eslint-disable no-unused-vars */
+const {request, response} = require('express');
+const express = require('express');
 const app = express();
-const { Todo } = require("./models");
-const bodyParser = require("body-parser");
-const path = require("path");
+const csrf = require('tiny-csrf');
+
+const {Todo, User} = require('./models');
+
+const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
+
+const passport = require('passport');
+const connectEnsureLogin = require('connect-ensure-login');
+const session = require('express-session');
+const LocalStrategy = require('passport-local');
+
+const bcyrpt = require('bcrypt');
+const saltRounds = 10;
+
+const flash = require('connect-flash');
+
+
+app.use(express.urlencoded({extended: false}));
+const path = require('path');
+
+app.set('views',path.join(__dirname,'views'));
+app.use(flash());
+const user = require('./models/user');
+
+
 
 app.use(bodyParser.json());
+app.use(cookieParser('ssh!!!! some secret string'));
+app.use(csrf('this_should_be_32_character_long', ['POST', 'PUT', 'DELETE']));
 
-app.set("view engine", "ejs");
+app.use(session({
+  secret:"private",
+  cookie:{
+    maxAge: 24 * 60 * 60 * 1000 // that will be equal to 24 Hours / A whole day
+  }
+}))
 
-app.get("/healthz", (req, res) => {
-  // This is a health check endpoint for render which always returns 200
-  res.status(200).send("OK");
+app.use(passport.initialize());
+app.use(passport.session());
+app.use((request, response, next)=>{
+  response.locals.messages = request.flash();
+  next();
 });
 
-app.get("/", async (request, response) => {
-  const allTodos = await Todo.getTodos();
-  if (request.accepts("html")) {
-    response.render("index", {
-      allTodos,
+passport.use(new LocalStrategy({
+  usernameField: 'email',
+  password: 'password',
+},(username, password, done) => {
+  User.findOne({
+    where:{
+      email:username,
+      
+    }
+  })
+  .then(async(user) => {
+    const result = await bcyrpt.compare(password, user.password);
+    if(result){
+      return done(null,user);
+    } else{
+      return done(null, false, {message: "Invalid Password"});
+    }
+  })
+  .catch((error) => {
+    console.error(error);
+    return done(null,false,{
+      message: "You are not a registered user",
+    })
+
+  })
+}))
+
+
+passport.serializeUser((user, done)=>{
+  console.log("Serializing user in session",user.id)
+  done(null,user.id);
+});
+
+passport.deserializeUser((id,done) => {
+  User.findByPk(id)
+  .then(user => {
+    done(null, user)
+  })
+  .catch(error =>{
+    done(error, null)
+  })
+})
+// seting the ejs is the engine
+app.set('view engine', 'ejs');
+
+app.get('/', async (request, response)=>{
+  if(request.user)
+  {
+    response.redirect('/todos');
+  }
+  else{
+    response.render('index', {
+      title: 'Todo Application',
+      csrfToken: request.csrfToken(),
+    });
+  }
+  
+});
+
+app.get('/todos',connectEnsureLogin.ensureLoggedIn(), async (request, response)=>{
+  const loggedInUser = request.user.id;
+  const allTodos = await Todo.getTodos(loggedInUser);
+  const overdue = await Todo.overdue(loggedInUser);
+  const dueToday = await Todo.dueToday(loggedInUser);
+  const dueLater = await Todo.dueLater(loggedInUser);
+  const completedItems = await Todo.completedItems(loggedInUser);
+  if (request.accepts('html')) {
+    response.render('todos', {
+      allTodos, overdue, dueToday, dueLater, completedItems,user: request.user,
+      csrfToken: request.csrfToken(),
     });
   } else {
-    response.json({
-      allTodos,
+    response.json({allTodos, overdue, dueToday, dueLater});
+  }
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/signup',(request,response)=>{
+  response.render('signup',{
+    title: 'Sign Up',
+    csrfToken: request.csrfToken(),
+  });
+});
+
+app.post('/users',async (request,response)=>{
+  
+  if (!request.body.firstName) {
+    request.flash("error", "Enter a first name");
+    return response.redirect("/signup");
+  }
+  if (!request.body.email) {
+    request.flash("error", "Enter an email");
+    return response.redirect("/signup");
+  }
+  
+  if (!request.body.password) {
+    request.flash("error", "Enter the password");
+    return response.redirect("/signup");
+  }
+
+  
+  const hashedPwd =await bcyrpt.hash(request.body.password, saltRounds);
+  console.log(hashedPwd);
+  try{
+    const user = await User.create({
+      firstName: request.body.firstName,
+      lastName: request.body.lastName,
+      email: request.body.email,
+      password: hashedPwd,
     });
+    request.login(user, (err)=> {
+      if(err){
+        console.log(err);
+        response.redirect("/")
+      }
+      response.redirect('/todos');
+    })
+    
   }
+  catch(error){
+    console.log(error);
+    request.flash("error", error.errors[0].message);
+    response.redirect("/signup");
+  }
+
 });
 
-app.use(express.static(path.join(__dirname, "public")));
-
-app.get("/todos", async function (_request, response) {
-  console.log("Processing list of all Todos ...");
-  // FILL IN YOUR CODE HERE
-
-  // First, we have to query our PostgerSQL database using Sequelize to get list of all Todos.
-  // Then, we have to respond with all Todos, like:
-  // response.send(todos)
-  const todos = await Todo.getTodos();
-  response.send(todos);
+app.get('/login',(request,response)=>{
+  response.render('login',{
+    title:"Login",
+    csrfToken: request.csrfToken(),
+  });
 });
 
-app.get("/todos/:id", async function (request, response) {
+app.post('/session',passport.authenticate('local',{
+  failureRedirect: '/login',
+  failureFlash: true,
+}),(request,response)=>{
+  console.log(request.user);
+  response.redirect('/todos');
+})
+
+app.get('/signout',(request,response, next) => {
+  request.logOut((err)=>{
+    if(err)
+    {
+      return next(err);
+    }
+    response.redirect('/');
+  })
+})
+
+app.post('/todos', connectEnsureLogin.ensureLoggedIn(),async (request, response)=>{
+ if (!request.body.title) {
+    request.flash("error", "Add title");
+    response.redirect("/todos");
+  }
+  if (!request.body.dueDate) {
+    request.flash("error", "Add date");
+    response.redirect("/todos");
+  }
   try {
-    const todo = await Todo.findByPk(request.params.id);
-    return response.json(todo);
+    
+    console.log('entering in try block');
+    const todo =await Todo.addTodo({
+      title: request.body.title, 
+      dueDate: request.body.dueDate,
+      userId: request.user.id,
+    });
+    return response.redirect('/todos');
   } catch (error) {
     console.log(error);
     return response.status(422).json(error);
   }
 });
 
-app.post("/todos", async function (request, response) {
-  try {
-    const todo = await Todo.addTodo(request.body);
-    return response.json(todo);
-  } catch (error) {
-    console.log(error);
-    return response.status(422).json(error);
-  }
-});
-
-app.put("/todos/:id/markAsCompleted", async function (request, response) {
+app.put('/todos/:id', async (request, response) => {
   const todo = await Todo.findByPk(request.params.id);
   try {
-    const updatedTodo = await todo.markAsCompleted();
-    return response.json(updatedTodo);
+    const upTodo = await todo.setCompletionStatus(request.body.completed);
+    return response.json(upTodo);
   } catch (error) {
-    console.log(error);
     return response.status(422).json(error);
   }
 });
 
-app.delete("/todos/:id", async function (request, response) {
-  console.log("We have to delete a Todo with ID: ", request.params.id);
-  // FILL IN YOUR CODE HERE
-
-  // First, we have to query our database to delete a Todo by ID.
-  // Then, we have to respond back with true/false based on whether the Todo was deleted or not.
-  // response.send(true)
-  const todo = await Todo.findByPk(request.params.id);
-  try {
-    await todo.deleteTodo();
-    return response.json(true);
-  } catch (error) {
-    console.log(error);
-    return response.status(422).json(false);
+app.delete('/todos/:id', connectEnsureLogin.ensureLoggedIn(), async function(request, response) {
+  console.log('We have to delete a Todo with ID: ', request.params.id);
+  
+  const deleteFlag = await Todo.destroy({where: {id: request.params.id, userId:request.user.id,}});
+  if(deleteFlag ===0)
+  {
+    return response.send(false);
+  }
+  else{
+    response.send(true);
   }
 });
 
